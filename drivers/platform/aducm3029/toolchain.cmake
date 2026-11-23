@@ -1,9 +1,7 @@
 # ADuCM3029 (aducm) platform toolchain
 #
-# The ADuCM3029 build relies on Analog Devices CrossCore Embedded Studio (CCES)
-# both for the cross compiler / OpenOCD and (later, in the platform SDK module)
-# for generating the project startup, pinmux, RTE config and linker script.
-# This file performs the CCES/DFP discovery for the ADuCM3029 platform.
+# Compiler and OpenOCD come from PATH. The DFP and CMSIS come from a CMSIS pack
+# root. Device sources and linker script are in aducm3029_platform_sdk.cmake.
 
 message(STATUS "ADuCM3029 Platform")
 
@@ -11,78 +9,40 @@ set(CMAKE_SYSTEM_NAME Generic)
 set(CMAKE_SYSTEM_PROCESSOR arm)
 
 # For bare-metal toolchains, only compile (not link) during CMake's compiler
-# test. The link step needs the CCES-generated startup/linker script which does
-# not exist yet at toolchain-detection time.
+# test. Linking needs the project's linker script, which does not exist yet.
 set(CMAKE_TRY_COMPILE_TARGET_TYPE "STATIC_LIBRARY")
 
 # ---------------------------------------------------------------------------
-# Locate CrossCore Embedded Studio (CCES_HOME)
+# Locate CMSIS packs (ADuCM302x DFP + ARM CMSIS)
 # ---------------------------------------------------------------------------
-if(NOT CCES_HOME)
-    if(DEFINED ENV{CCES_HOME})
-        set(CCES_HOME "$ENV{CCES_HOME}")
-    elseif(CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
-        file(GLOB _cces_candidates "C:/Analog Devices/CrossCore Embedded Studio*")
+if(NOT ADUCM_PACK_ROOT)
+    if(DEFINED ENV{CMSIS_PACK_ROOT})
+        set(ADUCM_PACK_ROOT "$ENV{CMSIS_PACK_ROOT}")
     else()
-        file(GLOB _cces_candidates "/opt/analog/cces/*")
-    endif()
-
-    if(NOT CCES_HOME AND _cces_candidates)
-        # Pick the highest (last) version directory.
-        list(SORT _cces_candidates)
-        list(GET _cces_candidates -1 CCES_HOME)
+        set(ADUCM_PACK_ROOT "$ENV{HOME}/.cache/arm/packs")
     endif()
 endif()
+set(ADUCM_PACK_ROOT "${ADUCM_PACK_ROOT}" CACHE PATH "CMSIS pack root" FORCE)
 
-if(NOT CCES_HOME OR NOT EXISTS "${CCES_HOME}")
-    message(FATAL_ERROR
-        "CCES_HOME not found. Install Analog Devices CrossCore Embedded Studio "
-        "and set the CCES_HOME environment variable (e.g. "
-        "export CCES_HOME=/opt/analog/cces/3.0.3) or pass -DCCES_HOME=...")
-endif()
-
-# Normalize to forward slashes. On Windows CCES_HOME arrives with backslashes
-# (e.g. C:\analog\cces\3.0.3), and paths derived from it are emitted verbatim
-# into .vscode/launch.json (searchDir) and openocd.cfg. Backslash sequences like
-# \a \c \3 are invalid JSON string escapes, so Cortex-Debug mangles the OpenOCD
-# -s search dir (C:\analog\cces\3.0.3 -> C:nalogces.0.3) and fails to parse the
-# launch config. Forward slashes are valid JSON and accepted by all Windows
-# tools (OpenOCD, GCC, GDB), so convert once here and every derived path is safe.
-file(TO_CMAKE_PATH "${CCES_HOME}" CCES_HOME)
-set(CCES_HOME "${CCES_HOME}" CACHE PATH "CrossCore Embedded Studio install root" FORCE)
-message(STATUS "CCES_HOME: ${CCES_HOME}")
-
-# Tool / SDK locations derived from CCES_HOME.
-set(CCES_COMPILER_BIN "${CCES_HOME}/ARM/gcc-arm-embedded/bin")
-set(CCES_OPENOCD_BIN "${CCES_HOME}/ARM/openocd/bin")
-set(CCES_OPENOCD_SCRIPTS "${CCES_HOME}/ARM/openocd/share/openocd/scripts")
-set(CCES_EXE "${CCES_HOME}/Eclipse" CACHE PATH "CCES Eclipse directory" FORCE)
-
-# Device Family Pack and CMSIS Core (globbed: versioned directories).
-file(GLOB _aducm_dfp "${CCES_HOME}/ARM/packs/AnalogDevices/ADuCM302x_DFP/*")
+file(GLOB _aducm_dfp "${ADUCM_PACK_ROOT}/AnalogDevices/ADuCM302x_DFP/*")
 if(_aducm_dfp)
     list(SORT _aducm_dfp)
     list(GET _aducm_dfp -1 ADUCM_DFP)
 endif()
-file(GLOB _cmsis_core "${CCES_HOME}/ARM/packs/ARM/CMSIS/*/CMSIS/Core")
+file(GLOB _cmsis_core "${ADUCM_PACK_ROOT}/ARM/CMSIS/*/CMSIS/Core")
 if(_cmsis_core)
     list(SORT _cmsis_core)
     list(GET _cmsis_core -1 ADUCM_CMSIS_CORE)
 endif()
 
 if(NOT ADUCM_DFP OR NOT EXISTS "${ADUCM_DFP}")
-    message(FATAL_ERROR
-        "ADuCM302x Device Family Pack not found under "
-        "${CCES_HOME}/ARM/packs/AnalogDevices/ADuCM302x_DFP. "
-        "Install it via the CCES pack manager.")
+    message(FATAL_ERROR "ADuCM302x DFP not found under ${ADUCM_PACK_ROOT}/AnalogDevices/ADuCM302x_DFP.")
 endif()
 if(NOT ADUCM_CMSIS_CORE OR NOT EXISTS "${ADUCM_CMSIS_CORE}")
-    message(FATAL_ERROR
-        "CMSIS Core pack not found under ${CCES_HOME}/ARM/packs/ARM/CMSIS. "
-        "Install it via the CCES pack manager.")
+    message(FATAL_ERROR "CMSIS Core not found under ${ADUCM_PACK_ROOT}/ARM/CMSIS.")
 endif()
 
-# Export for the platform SDK module and CMakeLists (CCES headless gen, includes).
+# Cached for the platform SDK module and CMakeLists.
 set(ADUCM_DFP "${ADUCM_DFP}" CACHE PATH "ADuCM302x Device Family Pack" FORCE)
 set(ADUCM_CMSIS_CORE "${ADUCM_CMSIS_CORE}" CACHE PATH "CMSIS Core pack" FORCE)
 message(STATUS "ADuCM DFP: ${ADUCM_DFP}")
@@ -91,29 +51,16 @@ message(STATUS "CMSIS Core: ${ADUCM_CMSIS_CORE}")
 # ---------------------------------------------------------------------------
 # Compiler selection
 # ---------------------------------------------------------------------------
-if(NOT DEFINED USE_VENDOR_TOOLCHAIN)
-    set(USE_VENDOR_TOOLCHAIN ON)
-endif()
-
-if(USE_VENDOR_TOOLCHAIN)
-    set(_cc_hints "${CCES_COMPILER_BIN}")
-else()
-    set(_cc_hints "")
-endif()
-
-find_program(CMAKE_C_COMPILER   arm-none-eabi-gcc     HINTS ${_cc_hints})
-find_program(CMAKE_CXX_COMPILER arm-none-eabi-g++     HINTS ${_cc_hints})
-find_program(CMAKE_ASM_COMPILER arm-none-eabi-gcc     HINTS ${_cc_hints})
-find_program(CMAKE_LINKER       arm-none-eabi-ld      HINTS ${_cc_hints})
-find_program(CMAKE_SIZE         arm-none-eabi-size    HINTS ${_cc_hints})
-find_program(CMAKE_OBJCOPY      arm-none-eabi-objcopy HINTS ${_cc_hints})
-find_program(CMAKE_AR           arm-none-eabi-ar      HINTS ${_cc_hints})
+find_program(CMAKE_C_COMPILER   arm-none-eabi-gcc)
+find_program(CMAKE_CXX_COMPILER arm-none-eabi-g++)
+find_program(CMAKE_ASM_COMPILER arm-none-eabi-gcc)
+find_program(CMAKE_LINKER       arm-none-eabi-ld)
+find_program(CMAKE_SIZE         arm-none-eabi-size)
+find_program(CMAKE_OBJCOPY      arm-none-eabi-objcopy)
+find_program(CMAKE_AR           arm-none-eabi-ar)
 
 if(NOT CMAKE_C_COMPILER)
-    message(FATAL_ERROR
-        "arm-none-eabi-gcc not found (searched ${CCES_COMPILER_BIN} and PATH). "
-        "Check the CCES install, or configure with -DUSE_VENDOR_TOOLCHAIN=OFF to "
-        "use a compiler already on PATH.")
+    message(FATAL_ERROR "arm-none-eabi-gcc not found on PATH.")
 endif()
 
 set(CMAKE_EXECUTABLE_SUFFIX_ASM ".elf")
@@ -171,19 +118,18 @@ set(CMAKE_EXE_LINKER_FLAGS "${COMMON_CPU_FLAGS} -specs=nosys.specs -Wl,--gc-sect
 # ---------------------------------------------------------------------------
 find_program(OPENOCD_PATH
     NAMES openocd
-    HINTS "${CCES_OPENOCD_BIN}"
     DOC "Path to OpenOCD executable"
 )
 
 if(OPENOCD_PATH)
-    set(OPENOCD_SCRIPTS "${CCES_OPENOCD_SCRIPTS}")
+    get_filename_component(_ocd_bin "${OPENOCD_PATH}" DIRECTORY)
+    set(OPENOCD_SCRIPTS "${_ocd_bin}/../share/openocd/scripts")
     set(OPENOCD_INTERFACE "interface/cmsis-dap.cfg")
     set(OPENOCD_CHIPNAME "aducm3029")
     set(OPENOCD_TARGETCFG "target/aducm3029.cfg")
 
-    # target/aducm3029.cfg ships in the DFP's own openocd scripts directory, not
-    # the standard CCES scripts dir (-s OPENOCD_SCRIPTS). Add it to OpenOCD's
-    # search path so `source [find target/aducm3029.cfg]` resolves.
+    # target/aducm3029.cfg is in the DFP, not in OpenOCD's scripts dir. Add the
+    # DFP's openocd/scripts to the search path.
     set(OPENOCD_EXTRA_COMMANDS "add_script_search_dir \"${ADUCM_DFP}/openocd/scripts\"")
 
     if(NOT PROBE)
@@ -192,5 +138,5 @@ if(OPENOCD_PATH)
 
     message(STATUS "Found OpenOCD: ${OPENOCD_PATH}")
 else()
-    message(STATUS "OpenOCD not found in ${CCES_OPENOCD_BIN}")
+    message(STATUS "OpenOCD not found on PATH")
 endif()

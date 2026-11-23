@@ -13,7 +13,6 @@
 			"inherits": "aducm3029-base",
 			"cacheVariables": {
 				"BOARD": "eval-adicup3029",
-				"USE_VENDOR_TOOLCHAIN": "ON",
 				"PLATFORM": "aducm3029",
 				"TARGET": "ADuCM3029",
 				"BOARD_CONFIG_FILE": "eval-adicup3029_defconfig"
